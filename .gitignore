@@ -1,7 +1,8 @@
 .DS_Store
 node_modules
 dist
+dist-ssr
 TODOs.md
-playground
 *.log
 test/temp
+explorations

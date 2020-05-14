@@ -1,0 +1,10 @@
+{
+  "scripts": {
+    "dev": "vite --debug",
+    "build": "vite build --debug",
+    "serve": "serve dist"
+  },
+  "dependencies": {
+    "lodash-es": "^4.17.15"
+  }
+}

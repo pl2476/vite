@@ -1,9 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "baseUrl": ".",
-    "outDir": "../../dist/client",
+    "outDir": "../../dist",
     "module": "esnext",
+    "types": [],
     "lib": ["ESNext", "DOM"]
   },
   "include": ["./"]

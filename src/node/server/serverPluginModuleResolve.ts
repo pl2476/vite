@@ -3,7 +3,7 @@ import chalk from 'chalk'
 import { ServerPlugin } from '.'
 import { resolveVue, cachedRead } from '../utils'
 import { URL } from 'url'
-import { resolveOptimizedModule, resolveNodeModule } from '../resolver'
+import { resolveOptimizedModule, resolveNodeModuleFile } from '../resolver'
 
 const debug = require('debug')('vite:resolve')
 
@@ -19,6 +19,8 @@ const getDebugPath = (root: string, p: string) => {
 
 // plugin for resolving /@modules/:id requests.
 export const moduleResolvePlugin: ServerPlugin = ({ root, app, watcher }) => {
+  const vueResolved = resolveVue(root)
+
   app.use(async (ctx, next) => {
     if (!moduleRE.test(ctx.path)) {
       return next()
@@ -41,12 +43,9 @@ export const moduleResolvePlugin: ServerPlugin = ({ root, app, watcher }) => {
       await next()
     }
 
-    // speical handling for vue runtime in case it's not installed
-    if (id === 'vue') {
-      const vuePath = resolveVue(root).vue
-      if (vuePath) {
-        return serve(id, vuePath, '(non-local vue)')
-      }
+    // special handling for vue runtime in case it's not installed
+    if (!vueResolved.isLocal && id in vueResolved) {
+      return serve(id, (vueResolved as any)[id], 'non-local vue')
     }
 
     // already resolved and cached
@@ -61,7 +60,7 @@ export const moduleResolvePlugin: ServerPlugin = ({ root, app, watcher }) => {
       return serve(id, optimized, 'optimized')
     }
 
-    const nodeModulePath = resolveNodeModule(root, id)
+    const nodeModulePath = resolveNodeModuleFile(root, id)
     if (nodeModulePath) {
       return serve(id, nodeModulePath, 'node_modules')
     }

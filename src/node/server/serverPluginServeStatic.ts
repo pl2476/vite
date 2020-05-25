@@ -1,4 +1,3 @@
-import path from 'path'
 import { ServerPlugin } from '.'
 
 const send = require('koa-send')
@@ -17,40 +16,6 @@ export const serveStaticPlugin: ServerPlugin = ({
     if (ctx.body || ctx.status !== 404) {
       return
     }
-    return next()
-  })
-
-  // history API fallback
-  app.use((ctx, next) => {
-    if (ctx.method !== 'GET') {
-      debug(`not redirecting ${ctx.url} (not GET)`)
-      return next()
-    }
-
-    const accept = ctx.headers && ctx.headers.accept
-    if (typeof accept !== 'string') {
-      debug(`not redirecting ${ctx.url} (no headers.accept)`)
-      return next()
-    }
-
-    if (accept.includes('application/json')) {
-      debug(`not redirecting ${ctx.url} (json)`)
-      return next()
-    }
-
-    if (!(accept.includes('text/html') || accept.includes('*/*'))) {
-      debug(`not redirecting ${ctx.url} (not accepting html)`)
-      return next()
-    }
-
-    const ext = path.extname(ctx.path)
-    if (ext && !accept.includes('text/html')) {
-      debug(`not redirecting ${ctx.url} (has file extension)`)
-      return next()
-    }
-
-    debug(`redirecting ${ctx.url} to /index.html`)
-    ctx.url = '/index.html'
     return next()
   })
 
@@ -77,4 +42,41 @@ export const serveStaticPlugin: ServerPlugin = ({
   })
 
   app.use(require('koa-static')(root))
+
+  // history API fallback
+  app.use(async (ctx, next) => {
+    if (ctx.status !== 404) {
+      return next()
+    }
+
+    if (ctx.method !== 'GET') {
+      debug(`not redirecting ${ctx.url} (not GET)`)
+      return next()
+    }
+
+    const accept = ctx.headers && ctx.headers.accept
+    if (typeof accept !== 'string') {
+      debug(`not redirecting ${ctx.url} (no headers.accept)`)
+      return next()
+    }
+
+    if (accept.includes('application/json')) {
+      debug(`not redirecting ${ctx.url} (json)`)
+      return next()
+    }
+
+    if (!accept.includes('text/html')) {
+      debug(`not redirecting ${ctx.url} (not accepting html)`)
+      return next()
+    }
+
+    debug(`redirecting ${ctx.url} to /index.html`)
+    try {
+      await send(ctx, `/index.html`)
+    } catch (e) {
+      ctx.url = '/index.html'
+      ctx.status = 404
+      return next()
+    }
+  })
 }

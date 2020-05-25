@@ -10,6 +10,7 @@ if (argv.debug) {
 }
 
 import os from 'os'
+import path from 'path'
 import chalk from 'chalk'
 import { UserConfig, resolveConfig } from './config'
 
@@ -94,7 +95,7 @@ async function resolveOptions() {
   // normalize root
   // assumes all commands are in the form of `vite [command] [root]`
   if (argv._[1] && !argv.root) {
-    argv.root = argv._[1]
+    argv.root = path.isAbsolute(argv._[1]) ? argv._[1] : path.resolve(argv._[1])
   }
 
   const userConfig = await resolveConfig(argv.config || argv.c)
@@ -107,17 +108,11 @@ async function resolveOptions() {
   return argv
 }
 
-async function runServe(
-  options: UserConfig & {
-    port?: number
-    open?: boolean
-  }
-) {
-  await require('../dist').optimizeDeps(options)
-
-  const server = require('../dist').createServer(options)
+async function runServe(options: UserConfig) {
+  const server = require('./server').createServer(options)
 
   let port = options.port || 3000
+  const protocol = options.https ? 'https' : 'http'
   server.on('error', (e: Error & { code?: string }) => {
     if (e.code === 'EADDRINUSE') {
       console.log(`Port ${port} is in use, trying another one...`)
@@ -143,12 +138,12 @@ async function runServe(
             type: detail.address.includes('127.0.0.1')
               ? 'Local:   '
               : 'Network: ',
-            ip: detail.address.replace('127.0.0.1', 'localhost')
+            host: detail.address.replace('127.0.0.1', 'localhost')
           }
         })
-        .forEach((address: { type?: String; ip?: String }) => {
-          const url = `http://${address.ip}:${chalk.bold(port)}/`
-          console.log(`  > ${address.type} ${chalk.cyan(url)}`)
+        .forEach(({ type, host }) => {
+          const url = `${protocol}://${host}:${chalk.bold(port)}/`
+          console.log(`  > ${type} ${chalk.cyan(url)}`)
         })
     })
     console.log()
@@ -162,7 +157,7 @@ async function runServe(
 
 async function runBuild(options: UserConfig) {
   try {
-    await require('../dist').build(options)
+    await require('./build').build(options)
     process.exit(0)
   } catch (err) {
     console.error(chalk.red(`[vite] Build errored out.`))
@@ -173,7 +168,10 @@ async function runBuild(options: UserConfig) {
 
 async function runOptimize(options: UserConfig) {
   try {
-    await require('../dist').optimizeDeps(options, true /* as cli command */)
+    await require('./depOptimizer').optimizeDeps(
+      options,
+      true /* as cli command */
+    )
     process.exit(0)
   } catch (err) {
     console.error(chalk.red(`[vite] Dep optimization errored out.`))

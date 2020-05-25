@@ -1,16 +1,21 @@
 import path from 'path'
 import fs from 'fs-extra'
 import chalk from 'chalk'
-import { createEsbuildPlugin } from './build/buildPluginEsbuild'
-import { ServerPlugin } from './server'
-import { Resolver } from './resolver'
+import { DotenvParseOutput } from 'dotenv'
 import { Options as RollupPluginVueOptions } from 'rollup-plugin-vue'
 import { CompilerOptions } from '@vue/compiler-sfc'
 import Rollup, {
   InputOptions as RollupInputOptions,
-  OutputOptions as RollupOutputOptions
+  OutputOptions as RollupOutputOptions,
+  OutputChunk
 } from 'rollup'
+import { createEsbuildPlugin } from './build/buildPluginEsbuild'
+import { ServerPlugin } from './server'
+import { Resolver } from './resolver'
 import { Transform } from './transform'
+import { DepOptimizationOptions } from './depOptimizer'
+import { IKoaProxiesOptions } from 'koa-proxies'
+import { ServerOptions } from 'https'
 
 export { Resolver, Transform }
 
@@ -26,6 +31,16 @@ export interface SharedConfig {
   root?: string
   /**
    * Import alias. Can only be exact mapping, does not support wildcard syntax.
+   *
+   * Example `vite.config.js`:
+   * ``` js
+   * module.exports = {
+   *   alias: {
+   *     'react': '@pika/react',
+   *     'react-dom': '@pika/react-dom'
+   *   }
+   * }
+   * ```
    */
   alias?: Record<string, string>
   /**
@@ -38,16 +53,27 @@ export interface SharedConfig {
    */
   resolvers?: Resolver[]
   /**
-   * Options to pass to @vue/compiler-dom
+   * Configure dep optimization behavior.
+   *
+   * Example `vite.config.js`:
+   * ``` js
+   * module.exports = {
+   *   optimizeDeps: {
+   *     exclude: ['dep-a', 'dep-b']
+   *   }
+   * }
+   * ```
+   */
+  optimizeDeps?: DepOptimizationOptions
+  /**
+   * Options to pass to `@vue/compiler-dom`
+   *
+   * https://github.com/vuejs/vue-next/blob/master/packages/compiler-core/src/options.ts
    */
   vueCompilerOptions?: CompilerOptions
   /**
    * Configure what to use for jsx factory and fragment.
-   * @default
-   * {
-   *   factory: 'React.createElement',
-   *   fragment: 'React.Fragment'
-   * }
+   * @default 'vue'
    */
   jsx?:
     | 'vue'
@@ -57,9 +83,46 @@ export interface SharedConfig {
         factory?: string
         fragment?: string
       }
+  /**
+   * Environment variables .
+   */
+  env?: DotenvParseOutput
 }
 
 export interface ServerConfig extends SharedConfig {
+  port?: number
+  open?: boolean
+  /**
+   * Configure https.
+   */
+  https?: boolean
+  httpsOption?: ServerOptions
+  /**
+   * Configure custom proxy rules for the dev server. Uses
+   * [`koa-proxies`](https://github.com/vagusX/koa-proxies) which in turn uses
+   * [`http-proxy`](https://github.com/http-party/node-http-proxy). Each key can
+   * be a path Full options
+   * [here](https://github.com/http-party/node-http-proxy#options).
+   *
+   * Example `vite.config.js`:
+   * ``` js
+   * module.exports = {
+   *   proxy: {
+   *     proxy: {
+   *       // string shorthand
+   *       '/foo': 'http://localhost:4567/foo',
+   *       // with options
+   *       '/api': {
+   *         target: 'http://jsonplaceholder.typicode.com',
+   *         changeOrigin: true,
+   *         rewrite: path => path.replace(/^\/api/, '')
+   *       }
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  proxy?: Record<string, string | IKoaProxiesOptions>
   /**
    * Whether to use a Service Worker to cache served code. This can greatly
    * improve full page reload performance, but requires a Service Worker
@@ -68,7 +131,7 @@ export interface ServerConfig extends SharedConfig {
    * @default false
    */
   serviceWorker?: boolean
-  plugins?: ServerPlugin[]
+  configureServer?: ServerPlugin | ServerPlugin[]
 }
 
 export interface BuildConfig extends SharedConfig {
@@ -86,7 +149,7 @@ export interface BuildConfig extends SharedConfig {
   /**
    * Directory relative from `outDir` where the built js/css/image assets will
    * be placed.
-   * @default 'assets'
+   * @default '_assets'
    */
   assetsDir?: string
   /**
@@ -95,6 +158,13 @@ export interface BuildConfig extends SharedConfig {
    * @default 4096
    */
   assetsInlineLimit?: number
+  /**
+   * Whether to code-split CSS. When enabled, CSS in async chunks will be
+   * inlined as strings in the chunk and inserted via dynamically created
+   * style tags when the chunk is loaded.
+   * @default true
+   */
+  cssCodeSplit?: boolean
   /**
    * Whether to generate sourcemap
    * @default false
@@ -115,16 +185,27 @@ export interface BuildConfig extends SharedConfig {
   // The following are API only and not documented in the CLI. -----------------
   /**
    * Will be passed to rollup.rollup()
+   *
    * https://rollupjs.org/guide/en/#big-list-of-options
    */
   rollupInputOptions?: RollupInputOptions
   /**
+   * Will be passed to @rollup/plugin-commonjs
+   * https://github.com/rollup/plugins/tree/commonjs-v11.1.0/packages/commonjs#namedexports
+   * This config can be removed after master branch is released.
+   * But there are some issues blocking it:
+   * https://github.com/rollup/plugins/issues/392
+   */
+  rollupPluginCommonJSNamedExports?: Record<string, string[]>
+  /**
    * Will be passed to bundle.generate()
+   *
    * https://rollupjs.org/guide/en/#big-list-of-options
    */
   rollupOutputOptions?: RollupOutputOptions
   /**
    * Will be passed to rollup-plugin-vue
+   *
    * https://github.com/vuejs/rollup-plugin-vue/blob/next/src/index.ts
    */
   rollupPluginVueOptions?: Partial<RollupPluginVueOptions>
@@ -148,13 +229,15 @@ export interface BuildConfig extends SharedConfig {
    * @default true
    */
   emitAssets?: boolean
+  /**
+   * Predicate function that determines whether a link rel=modulepreload shall be
+   * added to the index.html for the chunk passed in
+   */
+  shouldPreload?: (chunk: OutputChunk) => boolean
 }
 
-export interface UserConfig
-  extends BuildConfig,
-    Pick<ServerConfig, 'serviceWorker'> {
+export interface UserConfig extends BuildConfig, ServerConfig {
   plugins?: Plugin[]
-  configureServer?: ServerPlugin
 }
 
 export interface Plugin
@@ -175,17 +258,18 @@ export async function resolveConfig(
   configPath: string | undefined
 ): Promise<ResolvedConfig | undefined> {
   const start = Date.now()
+  const cwd = process.cwd()
   let config: ResolvedConfig | undefined
   let resolvedPath: string | undefined
   let isTS = false
   if (configPath) {
-    resolvedPath = path.resolve(process.cwd(), configPath)
+    resolvedPath = path.resolve(cwd, configPath)
   } else {
-    const jsConfigPath = path.resolve(process.cwd(), 'vite.config.js')
+    const jsConfigPath = path.resolve(cwd, 'vite.config.js')
     if (fs.existsSync(jsConfigPath)) {
       resolvedPath = jsConfigPath
     } else {
-      const tsConfigPath = path.resolve(process.cwd(), 'vite.config.ts')
+      const tsConfigPath = path.resolve(cwd, 'vite.config.ts')
       if (fs.existsSync(tsConfigPath)) {
         isTS = true
         resolvedPath = tsConfigPath
@@ -246,9 +330,17 @@ export async function resolveConfig(
       for (const plugin of config.plugins) {
         config = resolvePlugin(config, plugin)
       }
-      // delete plugins so it doesn't get passed to `createServer` as server
-      // plugins.
-      delete config.plugins
+    }
+
+    // load environment variables
+    const envConfigPath = path.resolve(cwd, '.env')
+    if (fs.existsSync(envConfigPath) && fs.statSync(envConfigPath).isFile()) {
+      const env = require('dotenv').config()
+      if (env.error) {
+        throw env.error
+      }
+
+      config.env = env.parsed
     }
 
     require('debug')('vite:config')(
@@ -299,14 +391,10 @@ function resolvePlugin(config: UserConfig, plugin: Plugin): UserConfig {
     },
     transforms: [...(config.transforms || []), ...(plugin.transforms || [])],
     resolvers: [...(config.resolvers || []), ...(plugin.resolvers || [])],
-    configureServer: (ctx) => {
-      if (config.configureServer) {
-        config.configureServer(ctx)
-      }
-      if (plugin.configureServer) {
-        plugin.configureServer(ctx)
-      }
-    },
+    configureServer: ([] as any[]).concat(
+      config.configureServer || [],
+      plugin.configureServer || []
+    ),
     vueCompilerOptions: {
       ...config.vueCompilerOptions,
       ...plugin.vueCompilerOptions

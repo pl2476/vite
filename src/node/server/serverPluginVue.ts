@@ -22,15 +22,13 @@ import {
   resolveFrom,
   cachedRead,
   genSourceMapString,
-  loadPostcssConfig,
-  cleanUrl,
   resolveRelativeRequest
 } from '../utils'
 import { Context } from 'koa'
 import { transform } from '../esbuildService'
 import { InternalResolver } from '../resolver'
-import qs from 'querystring'
 import { seenUrls } from './serverPluginServeStatic'
+import { compileCss, rewriteCssUrls } from '../utils/cssUtils'
 
 const debug = require('debug')('vite:sfc')
 const getEtag = require('etag')
@@ -127,32 +125,13 @@ export const vuePlugin: ServerPlugin = ({
         ctx.type = 'js'
         ctx.body = `export default ${JSON.stringify(result.modules)}`
       } else {
-        ctx.type = 'css'
-        ctx.body = result.code
+        ctx.type = 'js'
+        ctx.body = `export default ${JSON.stringify(result.code)}`
       }
       return etagCacheCheck(ctx)
     }
 
     // TODO custom blocks
-  })
-
-  // handle HMR for <style src="xxx.css">
-  // it cannot be handled as simple css import because it may be scoped
-  watcher.on('change', (file) => {
-    const styleImport = srcImportMap.get(file)
-    if (styleImport) {
-      vueCache.del(file)
-      const publicPath = cleanUrl(styleImport)
-      const index = qs.parse(styleImport.split('?', 2)[1]).index
-      console.log(chalk.green(`[vite:hmr] `) + `${publicPath} updated. (style)`)
-      watcher.send({
-        type: 'vue-style-update',
-        path: publicPath,
-        index: Number(index),
-        id: `${hash_sum(publicPath)}-${index}`,
-        timestamp: Date.now()
-      })
-    }
   })
 }
 
@@ -272,7 +251,8 @@ async function compileSFCMain(
         )}`
         code += `\n__cssModules[${JSON.stringify(moduleName)}] = ${styleVar}`
       }
-      code += `\nupdateStyle("${id}-${i}", ${JSON.stringify(styleRequest)})`
+      code += `\nimport css_${i} from ${JSON.stringify(styleRequest)}`
+      code += `\nupdateStyle("${id}-${i}", css_${i})`
     })
     if (hasScoped) {
       code += `\n__script.__scopeId = "data-v-${id}"`
@@ -376,25 +356,17 @@ async function compileSFCStyle(
   }
 
   const start = Date.now()
-  const id = hash_sum(publicPath)
-  const postcssConfig = await loadPostcssConfig(root)
-  const { compileStyleAsync, generateCodeFrame } = resolveCompiler(root)
 
-  const result = await compileStyleAsync({
+  const { generateCodeFrame } = resolveCompiler(root)
+
+  const result = (await compileCss(root, publicPath, {
     source: style.content,
     filename,
-    id: `data-v-${id}`,
+    id: ``, // will be computed in compileCss
     scoped: style.scoped != null,
     modules: style.module != null,
-    preprocessLang: style.lang as any,
-    preprocessCustomRequire: (id: string) => require(resolveFrom(root, id)),
-    ...(postcssConfig
-      ? {
-          postcssOptions: postcssConfig.options,
-          postcssPlugins: postcssConfig.plugins
-        }
-      : {})
-  })
+    preprocessLang: style.lang as any
+  })) as SFCStyleCompileResults
 
   if (result.errors.length) {
     console.error(chalk.red(`\n[vite] SFC style compilation error: `))
@@ -432,6 +404,8 @@ async function compileSFCStyle(
       }
     })
   }
+
+  result.code = await rewriteCssUrls(result.code, publicPath)
 
   cached = cached || { styles: [] }
   cached.styles[index] = result
